@@ -32,70 +32,70 @@ impl PreFrame {
         let idx = self.frame_index;
         if matches!(self.action_state, State::Unknown(_)) {
             warn!(
-                "[Frame {idx}, Port{port}] Unknown state: {}",
-                self.action_state
+                "[Frame {idx}, Port {}] Unknown state: {}",
+                Port::from_repr(port).unwrap(), self.action_state
             );
         }
         if !matches!(self.orientation, -1.0 | 0.0 | 1.0) {
             warn!(
-                "[Frame {idx}, Port{port}] Invalid orientation raw value: {}",
-                self.orientation
+                "[Frame {idx}, Port {}] Invalid orientation raw value: {}",
+                Port::from_repr(port).unwrap(), self.orientation
             );
         }
         if !(-1.0..=1.0).contains(&self.joystick.x) || !(-1.0..=1.0).contains(&self.joystick.y) {
             warn!(
-                "[Frame {idx}, Port{port}] Invalid joystick coordinates: {}",
-                self.joystick
+                "[Frame {idx}, Port {}] Invalid joystick coordinates: {}",
+                Port::from_repr(port).unwrap(), self.joystick
             );
         }
         if !(-1.0..=1.0).contains(&self.cstick.x) || !(-1.0..=1.0).contains(&self.cstick.y) {
             warn!(
-                "[Frame {idx}, Port{port}] Invalid cstick coordinates: {}",
-                self.cstick
+                "[Frame {idx}, Port {}] Invalid cstick coordinates: {}",
+                Port::from_repr(port).unwrap(), self.cstick
             );
         }
         if !(0.0..=1.0).contains(&self.engine_trigger) {
             warn!(
-                "[Frame {idx}, Port{port}] Invalid engine trigger value: {}",
-                self.engine_trigger
+                "[Frame {idx}, Port {}] Invalid engine trigger value: {}",
+                Port::from_repr(port).unwrap(), self.engine_trigger
             );
         }
         if self.engine_buttons & 0x7F00_E080 != 0 {
             warn!(
-                "[Frame {idx}, Port{port}] Invalid bits set in engine buttons: {:032b}",
-                self.engine_buttons
+                "[Frame {idx}, Port {}] Invalid bits set in engine buttons: {:032b}",
+                Port::from_repr(port).unwrap(), self.engine_buttons
             );
         }
         if !(0.0..=1.0).contains(&self.controller_l) {
             warn!(
-                "[Frame {idx}, Port{port}] Invalid controller L value: {}",
-                self.controller_l
+                "[Frame {idx}, Port {}] Invalid controller L value: {}",
+                Port::from_repr(port).unwrap(), self.controller_l
             );
         }
         if !(0.0..=1.0).contains(&self.controller_r) {
             warn!(
-                "[Frame {idx}, Port{port}] Invalid controller R value: {}",
-                self.controller_r
+                "[Frame {idx}, Port {}] Invalid controller R value: {}",
+                Port::from_repr(port).unwrap(), self.controller_r
             );
         }
-        if self.raw_stick_x.is_some_and(|x| !(-110..=110).contains(&x)) {
-            warn!(
-                "[Frame {idx}, Port{port}] Unexpected raw stick x: {}. Expected stick value in range -110 through 110",
-                self.raw_stick_x.unwrap()
-            );
-        }
+        // if self.raw_stick_x.is_some_and(|x| !(-110..=110).contains(&x)) {
+        //     warn!(
+        //         "[Frame {idx}, Port{port}] Unexpected raw stick x: {}. Expected stick value in range -110 through 110",
+        //         self.raw_stick_x.unwrap()
+        //     );
+        // }
         if self.percent.is_some_and(|p| !(0.0..1000.0).contains(&p)) {
             warn!(
-                "[Frame {idx}, Port{port}] Invalid percent: {}",
-                self.percent.unwrap()
+                "[Frame {idx}, Port {}] Invalid percent: {}",
+                Port::from_repr(port).unwrap(), self.percent.unwrap()
             );
         }
-        if self.raw_stick_y.is_some_and(|y| !(-110..=110).contains(&y)) {
-            warn!(
-                "[Frame {idx}, Port{port}] Unexpected raw stick y: {}. Expected stick value in range -110 through 110",
-                self.raw_stick_y.unwrap()
-            );
-        }
+        // if self.raw_stick_y.is_some_and(|y| !(-110..=110).contains(&y)) {
+        //     warn!(
+        //         "[Frame {idx}, Port{port}] Unexpected raw stick y: {}. Expected stick value in range -110 through 110",
+        //         self.raw_stick_y.unwrap()
+        //     );
+        // }
     }
 
     pub fn new(mut stream: Bytes, version: Version, players: &[Player; 4]) -> Self {

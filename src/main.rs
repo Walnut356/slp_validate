@@ -8,7 +8,7 @@ struct Args {
 }
 
 fn main() {
-    env_logger::builder().filter_level(log::LevelFilter::Debug).format_timestamp(None).init();
+    env_logger::builder().filter_level(log::LevelFilter::Info).format_timestamp(None).init();
     let args = Args::parse();
 
     parse(&args.path);

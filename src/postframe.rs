@@ -94,7 +94,7 @@ impl PostFrame {
         let idx = self.frame_index;
         let port = self.port;
         let character = Character::try_from_internal(self.character).unwrap();
-        if self.nana && self.character != Character::Nana.as_internal() {
+        if self.nana && character != Character::Nana {
             warn!(
                 "[Frame {idx}, Port{port}] Nana frame for non-nana character: {}",
                 self.character

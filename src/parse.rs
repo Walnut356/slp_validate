@@ -10,11 +10,19 @@ use anyhow::{anyhow, ensure, Result};
 use bytes::{Buf, Bytes};
 use log::{debug, error, info, log_enabled, trace, warn, Level};
 use serde_json::{Map, Value};
-use ssbm_utils::prelude::Character;
+use ssbm_utils::prelude::{Character, Port};
 use strum::FromRepr;
 
 use crate::{
-    frame::{FrameEnd, FrameStart}, game_end::GameEnd, game_start::GameStart, itemframe::ItemFrame, player::PlayerType, postframe::PostFrame, preframe::PreFrame, ubjson, utils::ParseError
+    frame::{FrameEnd, FrameStart},
+    game_end::GameEnd,
+    game_start::GameStart,
+    itemframe::ItemFrame,
+    player::PlayerType,
+    postframe::PostFrame,
+    preframe::PreFrame,
+    ubjson,
+    utils::ParseError,
 };
 
 pub fn parse(path: &str) {
@@ -23,11 +31,10 @@ pub fn parse(path: &str) {
         info!("Parsing file {path}");
 
         if let Err(e) = validate_game(f_path.to_path_buf()) {
-            error!("{e}");
+            error!("Error during parsing: {e}");
         }
         return;
-    }
-    if f_path.is_dir() {
+    } else if f_path.is_dir() {
         info!("Parsing directory {path}");
 
         let files: Vec<PathBuf> = fs::read_dir(f_path)
@@ -48,7 +55,11 @@ pub fn parse(path: &str) {
 
         info!("Found {} files", files.len());
         for file in files {
+            println!("---");
             info!("Validating {}", file.to_str().unwrap());
+            if let Err(e) = validate_game(file) {
+                error!("Error during parsing: {e}");
+            }
         }
         return;
     }
@@ -124,6 +135,13 @@ fn expect_bytes(stream: &mut Bytes, expected: &[u8], message: &str) -> std::io::
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expected {
+    port: Port,
+    nana: bool,
+    kind: EventType,
+}
+
 fn validate_game(path: PathBuf) -> Result<()> {
     let file_data = get_file_contents(&path)?;
     let mut stream = file_data.slice(..);
@@ -195,34 +213,64 @@ fn validate_game(path: PathBuf) -> Result<()> {
     let mut item = ItemFrame::default();
     let mut game_end = None;
 
-    let mut event_order = vec![EventType::FrameStart];
+    let mut event_order = vec![Expected {
+        port: Port::P1,
+        nana: false,
+        kind: EventType::FrameStart,
+    }];
 
     for player in &players {
         if matches!(player.player_type, PlayerType::CPU | PlayerType::Human) {
-            event_order.push(EventType::PreFrame);
+            event_order.push(Expected {
+                port: player.port,
+                nana: false,
+                kind: EventType::PreFrame,
+            });
             if player.character == Character::IceClimbers {
-                event_order.push(EventType::PreFrame);
+                event_order.push(Expected {
+                    port: player.port,
+                    nana: true,
+                    kind: EventType::PreFrame,
+                });
             }
         }
     }
 
-    event_order.push(EventType::Item);
+    event_order.push(Expected {
+        port: Port::P1,
+        nana: false,
+        kind: EventType::Item,
+    });
 
     for player in &players {
         if matches!(player.player_type, PlayerType::CPU | PlayerType::Human) {
-            event_order.push(EventType::PostFrame);
+            event_order.push(Expected {
+                port: player.port,
+                nana: false,
+                kind: EventType::PostFrame,
+            });
             if player.character == Character::IceClimbers {
-                event_order.push(EventType::PostFrame);
+                event_order.push(Expected {
+                    port: player.port,
+                    nana: false,
+                    kind: EventType::PostFrame,
+                });
             }
         }
     }
 
-    event_order.push(EventType::FrameEnd);
+    event_order.push(Expected {
+        port: Port::P1,
+        nana: false,
+        kind: EventType::FrameEnd,
+    });
     let mut order_idx = 0;
     let mut need_sync = false;
 
+    let mut actual_frames = 0;
 
-    while pos < raw_length as usize && event != EventType::GameEnd && stream.has_remaining(){
+    // --------------------------------------- Parse loop --------------------------------------- //
+    while pos < raw_length as usize && event != EventType::GameEnd && stream.has_remaining() {
         let code = stream.get_u8();
         event = EventType::from_repr(code).unwrap_or_default();
         /* EventType::None allows the parser to continue working on newer replays (with possible
@@ -235,10 +283,13 @@ fn validate_game(path: PathBuf) -> Result<()> {
 
         match event {
             EventType::FrameStart => {
+                actual_frames += 1;
+
                 let old_frame = fstart.frame_idx;
                 fstart = FrameStart::new(stream.slice(..size), version);
-                if need_sync || event_order[order_idx] != EventType::FrameStart {
-                    let expected = match event_order[order_idx] {
+                let exp_event = &event_order[order_idx];
+                if need_sync || (exp_event.kind != EventType::FrameStart && !exp_event.nana) {
+                    let expected = match exp_event.kind {
                         EventType::Item => "EventType::Item or EventType::PostFrame".to_owned(),
                         x => format!("EventType::{:?}", x),
                     };
@@ -250,68 +301,129 @@ fn validate_game(path: PathBuf) -> Result<()> {
                     error!("[File pos: {}] Unexpected frame ordering. Previous frame was index {}, current frame is index {}", pos, old_frame, fstart.frame_idx);
                 }
                 if fstart.frame_idx < old_frame {
-                    debug!("[File pos: {}] Rollback from frame {} to frame {}", pos, old_frame, fstart.frame_idx);
+                    debug!(
+                        "[File pos: {}] Rollback from frame {} to frame {}",
+                        pos, old_frame, fstart.frame_idx
+                    );
                 }
                 order_idx += 1;
-            },
+            }
             EventType::PreFrame => {
                 pre = PreFrame::new(stream.slice(..size), version, &players);
-                if !need_sync && event_order[order_idx] != EventType::PreFrame {
+                let exp_event = &event_order[order_idx];
+                let got_event = Expected {
+                    port: Port::from_repr(pre.port).unwrap(),
+                    nana: pre.nana,
+                    kind: EventType::PreFrame,
+                };
+
+                let mut not_exp = *exp_event != got_event;
+
+                if not_exp && exp_event.nana && event_order[order_idx + 1] == got_event {
+                    order_idx += 1;
+                    not_exp = false;
+                }
+
+                if !need_sync && not_exp && players.len() == 2 {
                     need_sync = true;
-                    let expected = match event_order[order_idx] {
+                    let expected = match exp_event.kind {
                         EventType::Item => "EventType::Item or EventType::PostFrame".to_owned(),
                         x => format!("{:?}", x),
                     };
                     error!("[File pos: {}] Unexpected event ordering. Expected {} for frame {}, got EventType::PreFrame for frame {}", pos, expected, fstart.frame_idx, pre.frame_index)
                 }
+
                 order_idx += 1;
-            },
+            }
             EventType::PostFrame => {
                 post = PostFrame::new(stream.slice(..size), version);
-                if !need_sync && !matches!(event_order[order_idx], EventType::PostFrame | EventType::Item) {
+                let mut exp_event = &event_order[order_idx];
+                let got_event = Expected {
+                    port: Port::from_repr(post.port).unwrap(),
+                    nana: post.nana,
+                    kind: EventType::PostFrame,
+                };
+
+                let mut not_exp = *exp_event != got_event;
+
+                if not_exp && exp_event.nana && event_order[order_idx + 1] == got_event {
+                    order_idx += 1;
+                    not_exp = false;
+                }
+
+                if !need_sync && not_exp && players.len() == 2 {
                     need_sync = true;
-                    let expected = match event_order[order_idx] {
+                    let expected = match exp_event.kind {
                         EventType::Item => "EventType::Item or EventType::PostFrame".to_owned(),
                         x => format!("{:?}", x),
                     };
                     error!("[File pos: {}] Unexpected event ordering. Expected {} for frame {}, got EventType::PostFrame for frame {}", pos, expected, fstart.frame_idx, pre.frame_index)
                 }
                 // handling for item frames as they aren't guaranteed to exist
-                if event_order[order_idx] == EventType::Item {
-                    order_idx += 2;
-                } else {
-                    order_idx += 1;
-                }
 
-            },
+                order_idx += 1;
+            }
             EventType::FrameEnd => {
                 fend = FrameEnd::new(stream.slice(..size), version);
-                if !need_sync && !matches!(event_order[order_idx], EventType::FrameEnd) {
+                let exp_event = &event_order[order_idx];
+                let got_event = Expected {
+                    port: Port::P1,
+                    nana: false,
+                    kind: EventType::FrameEnd,
+                };
+
+                let mut not_exp = *exp_event != got_event;
+
+                if not_exp && exp_event.nana && event_order[order_idx + 1] == got_event {
+                    order_idx += 1;
+                    not_exp = false;
+                }
+
+                if !need_sync && not_exp && players.len() == 2 {
                     need_sync = true;
                     error!("[File pos: {}] Unexpected event ordering. Expected {:?} for frame {}, got EventType::FrameEnd for frame {}", pos, event_order[order_idx], fstart.frame_idx, pre.frame_index)
                 }
                 order_idx = 0;
-            },
+            }
             // Item frames don't increment counter as there can be 0 or up to 15
             EventType::Item => {
                 item = ItemFrame::new(stream.slice(..size), version);
-                if !need_sync && !matches!(event_order[order_idx], EventType::Item) {
+                let exp_event = &event_order[order_idx];
+                let got_event = Expected {
+                    port: Port::P1,
+                    nana: false,
+                    kind: EventType::Item,
+                };
+
+                let mut not_exp = *exp_event != got_event;
+
+                if not_exp && exp_event.nana && event_order[order_idx + 1] == got_event {
+                    order_idx += 1;
+                    not_exp = false;
+                }
+
+                if !need_sync && not_exp && players.len() == 2 {
                     need_sync = true;
                     error!("[File pos: {}] Unexpected event ordering. Expected {:?} for frame {}, got EventType::Item for frame {}", pos, event_order[order_idx], fstart.frame_idx, pre.frame_index)
                 }
-
-            },
+            }
             EventType::GameEnd => {
                 if game_end.is_some() {
                     warn!("[File pos: {}] Duplicate game end event", pos);
                 }
                 game_end = Some(GameEnd::new(stream.slice(..size), version))
-            },
+            }
             _ => (),
         }
         stream.advance(event_sizes[&event] as usize);
         pos = file_data.len() - stream.len();
     }
 
+    info!(
+        "Expected Frames: {}, Actual Frames: {}, Rollback %: {}",
+        frame_count,
+        actual_frames,
+        (actual_frames as f32 - frame_count as f32) / actual_frames as f32
+    );
     Ok(())
 }
